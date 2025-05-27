@@ -1,0 +1,547 @@
+---
+title: "WGCNA: Rice"
+output: html_notebook
+---
+
+```{r}
+library(data.table)
+library(tidyverse)
+library(DESeq2)
+library(limma)
+library(FactoMineR)
+library(factoextra)
+library(WGCNA)
+```
+
+
+# Functions
+```{r}
+# Normalisation by Deseq2
+VST_norm <- function(input_data = NULL) {
+  require(DESeq2)
+  dds <- DESeqDataSetFromMatrix(
+  countData = input_data, # raw counts
+  colData = input_meta_data, 
+  design = ~Condition + batch # this won't affect the normalisation because by default blind = T in vst()
+)
+
+dds_norm <- vst(dds)
+VST_normCount <- as.data.frame(assay(dds_norm))
+VST_normCount
+}
+
+
+# Batch correction by removeBatchEffect(limma)
+remove_batch <- function(input_data = NULL, batch_effect = NULL) {
+  require(limma)
+  corrected <- removeBatchEffect(input_data, batch = batch_effect)
+  corrected
+}
+
+# GET_POWER
+get_power <- function(input_data = NULL, input_meta_data = NULL ,name = NULL) {
+
+input_data_t <- t(input_data)
+
+require(WGCNA)
+allowWGCNAThreads()          # allow multi-threading (optional)
+# Call the network topology analysis function
+sft <- pickSoftThreshold(input_data_t,
+                         dataIsExpr = TRUE,
+                         corFnc = cor,
+                         networkType = "signed",
+                         powerVector = c(seq(1, 30, by = 1)) # change to 1-30
+)
+
+
+sft_df <- data.frame(sft$fitIndices)
+sft_df$model_fit <- (-sign(sft_df$slope))* sft_df$SFT.R.sq
+
+
+require(ggplot2)
+p<- ggplot(sft_df, aes(x = Power, y = model_fit, label = Power)) +
+  # Plot the points
+  geom_point() +
+  # We'll put the Power labels slightly above the data points
+  geom_text(nudge_y = 0.1) +
+  # We will plot what WGCNA recommends as an R^2 cutoff
+  geom_hline(yintercept = 0.80, col = "red") +
+  # Just in case our values are low, we want to make sure we can still see the 0.80 level
+  ylim(c(min(sft_df$model_fit), 1.05)) +
+  # We can add more sensible labels for our axis
+  xlab("Soft Threshold (power)") +
+  ylab("Scale Free Topology Model Fit, signed R^2") +
+  ggtitle("Scale independence") +
+  # This adds some nicer aesthetics to our plot
+  theme_classic()
+
+
+ggsave(paste(name,"_GroupModel_power.png", sep = ""),
+       plot = p,
+       scale = 1,
+       width = 7,
+       height = 7,
+       units = c("in"),
+       dpi = 300)
+}
+
+
+# GET_PCA
+get_PCA <- function(input_data = NULL, 
+                    input_meta = NULL, 
+                    colour_palette = NULL, 
+                    name = NULL) {
+  
+  require(FactoMineR)
+  require(factoextra)
+  require(ggplot2)
+  pca <- PCA(t(input_data), graph = FALSE)
+  p <- fviz_pca_ind(pca,
+             geom.ind = "point", 
+             col.ind = input_meta, # color by groups
+             palette = colour_palette,
+             addEllipses = TRUE, # Concentration ellipses
+             legend.title = "Groups"
+             )
+  
+  ggsave(paste(name,"_PCA.png", sep = ""),
+       plot = p,
+       scale = 1,
+       width = 7,
+       height = 7,
+       units = c("in"),
+       dpi = 300)
+}
+
+
+```
+
+```{r}
+setwd("~/hc-storage/rice_transcriptomic/co-expression_analysis_rstudio")
+getwd()
+meta_data <- read.csv("salt_samples_list.csv")
+meta_data$batch <- factor(meta_data$batch, levels = unique(meta_data$batch))
+
+
+file_list <- list.files(path="./raw_counts",
+                        pattern=".ct",
+                        full.names=TRUE)
+
+data_table <- cbind.data.frame(sapply(file_list, fread, simplify = FALSE), idcol = "filename")
+rownames(data_table) <- data_table$`./raw_counts/SRR12011277_hisat2_dta_nomixed_map2Rap_rmdup_picard_name_count.ct.V1`
+
+data_table<- data_table %>% select(contains('V2'))
+col_names <- str_remove(colnames(data_table), "./raw_counts/")
+col_names <- str_split(col_names, "\\_", simplify=T)[,1]
+colnames(data_table) <-col_names
+
+data_table
+
+#write.csv(data_table, "all_raw_salt_rice.csv", row.names = T, quote = F)
+#write.csv(rownames(data_table_root_dis0), "data_table_root_dis0_geneName.csv", row.names = F, quote = F)
+```
+
+# Filter only root
+```{r}
+data_table <- read.csv("all_raw_salt_rice.csv", row.names = 1)
+
+meta_data_root <- meta_data %>% filter(Tissue == "Root", note2 == "")
+data_table_root <- data_table %>% select(meta_data_root$ï..Sample)
+data_table_root_dis0 <- data_table_root[rowSums(data_table_root>0)>0,] #33,641
+
+
+dds <- DESeqDataSetFromMatrix(
+  countData = data_table_root_dis0, # raw counts
+  colData = meta_data_root, 
+  design = ~Condition +batch #this won't affect the normalisation because by default blind = T in vst()
+)
+
+dds_norm <- vst(dds)
+VST_normCount <- as.data.frame(assay(dds_norm))
+
+#write.csv(data_table_root_dis0, "data_table_root_dis0.csv")
+#write.csv(VST_normCount, "VST_normCount_root.csv")
+#write.csv(meta_data_root, "meta_data_root.csv")
+
+
+# Get PCA 
+get_PCA(input_data = VST_normCount, colour_palette = c("#00AFBB", "#E7B800", "#FC4E07", "pink", "green"), input_meta = meta_data_root$batch, name = "coloured_by_batch")
+
+get_PCA(input_data = VST_normCount, colour_palette = c("blue", "red"), input_meta = meta_data_root$Condition, name = "coloured_by_condition")
+
+## looks like the data needs batch correction
+
+VST_normCount_corrected <- as.data.frame(removeBatchEffect(x = VST_normCount, batch = meta_data_root$batch))
+
+# get PCA after batch correction
+get_PCA(input_data = VST_normCount_corrected, colour_palette = c("#00AFBB", "#E7B800", "#FC4E07", "pink", "green"), input_meta = meta_data_root$batch, name = "Corrected_coloured_by_batch")
+
+get_PCA(input_data = VST_normCount_corrected, colour_palette = c("blue", "red"), input_meta = meta_data_root$Condition, name = "Corrected_coloured_by_condition")
+
+```
+
+```{r}
+get_power(input_data = VST_normCount_corrected, input_meta_data = meta_data_root, name = "root")
+
+```
+
+```{r}
+input_data_t <- t(VST_normCount_corrected)
+
+require(WGCNA)
+allowWGCNAThreads()          # allow multi-threading (optional)
+# Call the network topology analysis function
+sft <- pickSoftThreshold(input_data_t,
+                         dataIsExpr = TRUE,
+                         corFnc = cor,
+                         networkType = "signed",
+                         powerVector = c(seq(1, 30, by = 1)) # change to 1-30
+)
+
+
+sft_df <- data.frame(sft$fitIndices)
+sft_df$model_fit <- (-sign(sft_df$slope))* sft_df$SFT.R.sq
+
+```
+```{r}
+powers = c(c(1:10), seq(from = 12, to = 20, by = 2))   
+cex1 = 0.9
+
+name <- "rice_root"
+
+
+png(paste(name,"_scale_independence.png", sep = ""),width = 7,height = 7,units = "in",res = 300)
+plot(sft$fitIndices[, 1],
+     -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2] - 0.03,
+     xlab = "Soft Threshold (power)",
+     ylab = "Scale Free Topology Model Fit, signed R^2",
+     main = paste("Scale independence"),
+     pch =20)
+text(sft$fitIndices[, 1],
+     -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+     labels = powers, cex = cex1, col = "red")
+abline(h = 0.80, col = "red")
+dev.off()
+
+png(paste(name,"_mean_connectivity.png", sep = ""),width = 7,height = 7,units = "in",res = 300)
+plot(sft$fitIndices[, 1],
+     sft$fitIndices[, 5],
+     xlab = "Soft Threshold (power)",
+     ylab = "Mean Connectivity",
+     type = "n",
+     main = paste("Mean connectivity")
+)
+text(sft$fitIndices[, 1],
+     sft$fitIndices[, 5],
+     labels = powers,
+     cex = cex1, col = "red")
+dev.off()
+
+
+```
+
+```{r}
+# remove gene with negative values generated by normalization/batch correction
+VST_normCount_corrected_rmLow <- VST_normCount_corrected %>% rownames_to_column() %>% filter(if_all(where(is.numeric), ~ . >= 0)) %>% column_to_rownames() 
+
+picked_power = 10 # judged by the plot root_GroupModel_power.png
+temp_cor <- cor       
+cor <- WGCNA::cor         # Force it to use WGCNA cor function (fix a namespace conflict issue)
+netwk <- blockwiseModules(t(VST_normCount_corrected_rmLow),                # <= input here
+                          
+                          # == Adjacency Function ==
+                          power = picked_power,                # <= power here
+                          networkType = "signed",
+                          
+                          # == Tree and Block Options ==
+                          deepSplit = 2,
+                          pamRespectsDendro = F,
+                          # detectCutHeight = 0.75,
+                          minModuleSize = 30,
+                          maxBlockSize = 4000,
+                          
+                          # == Module Adjustments ==
+                          reassignThreshold = 0,
+                          mergeCutHeight = 0.25,
+                          
+                          # == TOM == Archive the run results in TOM file (saves time)
+                          saveTOMs = T,
+                          saveTOMFileBase = "ER",
+                          
+                          # == Output Options
+                          numericLabels = T,
+                          verbose = 3)
+
+#saveRDS(netwk, "netwk.rds")
+cor <- temp_cor     # Return cor function to original namespace
+
+# Convert labels to colors for plotting
+mergedColors = labels2colors(netwk$colors)
+
+saveRDS(mergedColors, "mergedColors.rds")
+
+# Plot the dendrogram and the module colors underneath
+plotDendroAndColors(
+  netwk$dendrograms[[1]],
+  mergedColors[netwk$blockGenes[[1]]],
+  "Module colors",
+  dendroLabels = FALSE,
+  hang = 0.03,
+  addGuide = TRUE,
+  guideHang = 0.05 )
+
+
+module_df <- data.frame(
+  gene_id = names(netwk$colors),
+  colors = labels2colors(netwk$colors)
+)
+
+#write.csv(module_df, "gene_modules_GroupModel.txt", row.names = F, quote = F)
+
+# Get Module Eigengenes per cluster
+MEs0 <- moduleEigengenes(t(VST_normCount_corrected_rmLow), mergedColors)$eigengenes
+
+# Reorder modules so similar modules are next to each other
+MEs0 <- orderMEs(MEs0)
+
+module_order = names(MEs0) %>% gsub("ME","", .)
+
+saveRDS(MEs0, "MEs0.rds")
+
+
+# Add treatment names
+MEs0$Condition = meta_data_root$Condition
+
+
+# tidy & plot data
+mME = MEs0 %>%
+  rownames_to_column() %>% 
+  gather(., key ="name", value = "value", -Condition, -rowname) %>%
+  mutate(
+    name = gsub("ME", "", name),
+    name = factor(name, levels = module_order)
+  ) %>% 
+  drop_na()
+
+mME$value <- as.numeric(mME$value)
+```
+
+# run all together
+```{r}
+
+SUMO_gene <- read.csv("./known_sumo_genes_Rice-Os_newDesi_newULP.csv")
+
+SUMO_modules <- module_df %>% filter(gene_id %in% SUMO_gene$RAPdb_id) %>% table() %>% as.data.frame() 
+SUMO_modules_anno <- SUMO_gene %>% left_join(SUMO_modules , by = c("RAPdb_id"="gene_id")) %>% drop_na()
+
+dummy_SUMO3 <- data.frame(filter(SUMO_gene, Gene_name == "OsSUMO3"), 
+                          colors = unique(SUMO_modules$colors), 
+                          Freq =0)
+
+SUMO_modules_anno <- rbind(SUMO_modules_anno, dummy_SUMO3)
+SUMO_modules_anno$Class <- factor(SUMO_modules_anno$Class , levels =  unique(SUMO_modules_anno$Class))
+SUMO_modules_anno$Freq <- factor(SUMO_modules_anno$Freq, levels = unique(SUMO_modules_anno$Freq)) 
+
+
+```
+```{r}
+p <- ggplot(SUMO_modules_anno, aes(x = colors, y = Gene_name, fill = Freq)) +
+  scale_fill_manual(values = c("white", "lightblue"))+
+  geom_tile() +
+  theme_bw() +
+  facet_grid(Class ~. , scales = "free", space = "free") +
+  theme(legend.position =  "none",
+        axis.text.x =element_text(angle = 30)) +
+  xlab("Modules") +
+  ylab("Gene names")
+
+ggsave("SUMOgenes_all_modules_salt_members_Desi_newULP.png",
+       plot = p,
+       scale = 1,
+       width = 5,
+       height = 8,
+       units = c("in"),
+       dpi = 300)
+```
+
+
+```{r}
+genes_of_interest = module_df %>% filter(colors == "blue")
+
+expr_of_interest = VST_normCount[genes_of_interest$gene_id,]
+
+# Only recalculate TOM for modules of interest (faster, altho there's some online discussion if this will be slightly off)
+TOM = TOMsimilarityFromExpr(t(expr_of_interest),
+                            power = 10)
+
+# Add gene names to row and columns
+row.names(TOM) = row.names(expr_of_interest)
+colnames(TOM) = row.names(expr_of_interest)
+
+edge_list = data.frame(TOM) %>%
+  mutate(
+    gene1 = row.names(.)
+  ) %>%
+  pivot_longer(-gene1) %>%
+  dplyr::rename(gene2 = name, correlation = value) %>%
+  unique() %>%
+  subset(!(gene1==gene2)) %>%
+  mutate(
+    module1 = module_df[gene1,]$colors,
+    module2 = module_df[gene2,]$colors
+  )
+
+head(edge_list)
+# Export Network file to be read into Cytoscape, VisANT, etc
+write_delim(edge_list,
+            file = "Blue_root_salt_edgelist.tsv",
+            delim = "\t")
+
+
+edge_list %>% filter(correlation > 0.5) %>% write.csv(. , "test.csv")
+```
+
+```{r}
+blue_edgelist <- read_tsv("Blue_root_salt_edgelist.tsv")
+```
+
+
+```{r}
+blue_sum <- blue_edgelist %>% select(-module1, -module2)%>% left_join(., SUMO_gene, by = c("gene1"="RAPdb_id"))%>% left_join(., SUMO_gene, by = c("gene2"="RAPdb_id"))
+
+
+#write_csv( blue_sum, "Blue_root_salt_edgelist_SUMOanno.tsv")
+```
+
+# version 07/2024
+```{r}
+RAPdb_anno <- read_tsv("IRGSP-1.0_representative_annotation_2024-07-12.tsv")
+RAPdb_anno_sub <- RAPdb_anno %>% select(Locus_ID, "RAP-DB Gene Symbol Synonym(s)") %>% 
+  mutate(Gene_name = ifelse(is.na(`RAP-DB Gene Symbol Synonym(s)`), Locus_ID, `RAP-DB Gene Symbol Synonym(s)`)) %>% 
+  select(-`RAP-DB Gene Symbol Synonym(s)`) %>% 
+  separate(Gene_name, into = c("Gene_name"))
+```
+```{r}
+
+blue_SUMO <- blue_edgelist %>% select(-module1, -module2) %>% filter(gene1 %in% SUMO_gene$RAPdb_id) %>%
+  left_join(., RAPdb_anno_sub, by = c("gene1"="Locus_ID"))  %>% 
+  left_join(., RAPdb_anno_sub, by = c("gene2"="Locus_ID"))  %>% 
+  left_join(., SUMO_gene, by = c("gene1"="RAPdb_id")) %>% 
+  distinct(.keep_all = T) %>% filter(correlation >= 0.2)
+
+write.csv(blue_SUMO , "update_blue_SUMO_edgeList_0.2.csv", quote = F, row.names = F) # can't get the second neighbors
+
+
+blue_SUMO <- blue_edgelist %>% select(-module1, -module2)  %>%
+  left_join(., RAPdb_anno_sub, by = c("gene1"="Locus_ID"))  %>% 
+  left_join(., RAPdb_anno_sub, by = c("gene2"="Locus_ID"))  %>% 
+  distinct(.keep_all = T) %>% filter(correlation >= 0.2)
+
+write.csv(blue_SUMO , "update_blue_edgeList_0.2.csv", quote = F, row.names = F)
+```
+
+```{r}
+blue_edgelist_uniq_0.2 <- blue_edgelist %>% select(-module1, -module2) %>% group_by(grp = paste0(pmin(gene1, gene2), pmax(gene1, gene2))) %>%
+ summarise_all(list(first)) %>%
+ ungroup() %>%
+ select(-grp) %>% 
+  filter(correlation >= 0.2)
+
+
+blue_edgelist_uniq_0.2 <- blue_edgelist_uniq_0.2 %>% left_join(., RAPdb_anno_sub, by = c("gene1"="Locus_ID"), relationship = "many-to-many") %>% 
+  drop_na()  %>%
+  left_join(., RAPdb_anno_sub, by = c("gene2"="Locus_ID")) %>% distinct(.keep_all = T) %>% 
+  group_by(gene1, gene2) %>% arrange(Gene_name.y) %>% slice_tail() %>% 
+  left_join(., SUMO_gene, by = c("gene1"="RAPdb_id")) %>% 
+  left_join(., SUMO_gene, by = c("gene2"="RAPdb_id")) 
+
+
+write.csv(blue_edgelist_uniq_0.2, "blue_edgelist_uniq_0.2.csv", quote = F, row.names = F)
+  
+```
+
+
+```{r}
+module_df <- read.csv("gene_modules_GroupModel.txt")
+all_module <- unique(module_df$colors)
+experiment <- unique(meta_data_root$batch)
+
+# Initialize list to store all results
+final_list <- list()
+
+for (i in seq_along(all_module)) {
+  module_name <- all_module[i]
+  gene_in_module <- module_df %>% filter(colors == module_name)
+
+  for (j in 1:length(experiment)) {
+    exp_name <- experiment[j]
+    deg_df <- DEG_list[[j]] %>% 
+      rownames_to_column(var = "rowname") %>%
+      filter(rowname %in% gene_in_module$gene_id) %>%
+      select(rowname, log2FoldChange, padj) %>%
+      mutate(module = module_name, exp = exp_name)
+
+    final_list[[length(final_list) + 1]] <- deg_df
+  }
+}
+
+# Combine all results into one data frame
+final_result <- bind_rows(final_list)
+final_result <- final_result %>% mutate(sig = if_else(padj <= 0.05 & abs(log2FoldChange) >=1, "sig", "ng"),
+                                        up_down = if_else(log2FoldChange >0, "up","down" ))
+final_result_sig <- final_result %>% filter(sig == "sig")
+
+DEG_in_all_module_byExp <- final_result_sig %>% group_by(module, exp, up_down ) %>% count()
+
+DEG_in_all_module_byExp<- DEG_in_all_module_byExp %>% 
+  mutate(exp2 = case_when(exp == "GSE275862" ~ "1",
+                          exp == "GSE252395" ~ "2",
+                          exp == "GSE270516" ~ "3",
+                          exp == "GSE229217" ~ "4",
+                          exp == "GSE124866" ~ "5",
+                          exp == "PRJNA904764" ~ "6",
+                          exp == "SUMOcode" ~ "7",
+                          exp == "PRJNA904764_2" ~ "8",
+                          exp == "PRJNA904764_3" ~ "9"))
+
+DEG_in_all_module_byExp$exp2 <- factor(DEG_in_all_module_byExp$exp2, levels =  c("1", "7", "3", "4", "5", "2", "6", "8", "9"))
+```
+
+```{r}
+
+png("Number_DEG_in_modules_by_exp_Arabidopsis.png", height = 10, width = 8, units = "in", res = 400)
+ggplot(DEG_in_all_module_byExp, aes(x= module, y = n, fill =up_down )) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  facet_grid(rows = vars(exp2), scales = "free_y", space = "fixed") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5),
+        axis.text = element_text(colour = "black")) +
+  scale_fill_manual(values=c('blue','red')) +
+  ylab("No. DEGs")
+dev.off()
+```
+
+```{r}
+final_result_avg_fc <- final_result %>% select(log2FoldChange, module,exp) %>%
+  group_by(module, exp) %>% 
+  summarise(mean = mean(log2FoldChange))
+
+final_result_avg_fc$exp <- factor(final_result_avg_fc$exp, levels =  c( "1.2","2","6","1", "5", "7"))
+
+final_result_avg_fc %>% filter(module  == "blue")
+```
+
+```{r}
+png("log2fc_avg_gene_blue-modules.png", height = 2, width = 5, res = 300, units = "in")
+ggplot(final_result_avg_fc %>% filter(module  == "blue"), aes(exp, module, fill= mean)) + 
+    geom_tile() +
+   scale_fill_gradient2(low = "white", high = "red", mid = "white", 
+   midpoint = 0, space = "Lab", 
+   name="log2FC",
+   limits = c(0, 3), oob = scales::squish) +
+  theme_bw()+
+  theme(axis.text = element_text(colour = "black"),
+        axis.title.x = element_blank())
+dev.off() 
+```
+

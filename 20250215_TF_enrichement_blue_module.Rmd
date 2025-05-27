@@ -1,0 +1,49 @@
+---
+title: "TF_enrichment_salt-specific_modules: rice"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+ID_map <- read.delim("RAP-MSU_2025-03-19.csv.txt", header = F)
+rice_TF <- read.csv("Osj_TF_list.csv")
+rice_TF_mod <- rice_TF %>% left_join(ID_map, by = c("Gene_ID"="V2")) %>% mutate(is_TF = "yes")
+
+write.csv(rice_TF_mod, "rice_TF_RAB-MSU.csv", quote = F)
+```
+
+```{r}
+blue_02_SUMO_1and2 <- read.csv("blue_SUMO_edgeList_0.2.csv")
+
+rice_TF_blue_02_SUMO_1and2 <- rice_TF_mod %>% filter(V1 %in%unique(blue_02_SUMO_1and2$gene1, blue_02_SUMO_1and2$gene2))
+
+rice_TF_blue_02_SUMO_1and2_freq <- as.data.frame(table(rice_TF_blue_02_SUMO_1and2$Family))
+rice_TF_total <- as.data.frame(table(rice_TF_mod$Family))
+
+rice_TF_blue_02_SUMO_1and2_percent <- data.frame(table(rice_TF_blue_02_SUMO_1and2$Family)) %>% 
+  left_join(rice_TF_total, by = "Var1") %>% 
+  mutate(percent = (Freq.x/Freq.y)*100)
+
+# Reorder 'family' based on 'num1'
+rice_TF_blue_02_SUMO_1and2_percent$Var1 <- reorder(rice_TF_blue_02_SUMO_1and2_percent$Var1, -(rice_TF_blue_02_SUMO_1and2_percent$Freq.x))
+
+png("TF_percent_in_blue_rice.png", height = 5, width = 8, units = "in", res = 300)
+ggplot(rice_TF_blue_02_SUMO_1and2_percent, aes(x = Var1, y = Freq.x, fill = "grey")) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = paste0(Freq.x, " (", round(percent, 1), "%)")), 
+            hjust = -0.1, size = 3.5) +
+  labs(
+    x = "Gene Family",
+    y = "Number of Genes"
+  ) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  scale_y_continuous(limits = c(0, max(rice_TF_blue_02_SUMO_1and2_percent$Freq.x)+3), expand = c(0, 0)) +
+  coord_flip()
+dev.off()
+```
+
+

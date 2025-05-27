@@ -1,0 +1,79 @@
+---
+title: "GO analysis: each modules from Arabidopsis's co-expression network"
+output: html_notebook
+---
+```{r}
+library(scales)
+library(gprofiler2)
+```
+
+```{r}
+background <- read.csv("Arabidopsis_root_salt_VST_normCount_corrected.csv")
+module_df <- read.csv("gene_modules_GroupModel.txt")
+# SUMOylation gene list
+SUMO_genes <- read.csv("SUMOylation_AT_genes_sepProtease.csv")
+
+gene_module_list <- list()
+colors_list <- unique(module_df$colors)
+
+for (i in 1:length(colors_list)) {
+  gene_module_list[colors_list[i]] <- module_df %>% filter(colors == colors_list[i])
+}
+
+GO_result <- gost(query = gene_module_list, 
+                organism = "athaliana", ordered_query = FALSE, 
+                multi_query = FALSE, significant = TRUE, exclude_iea = FALSE, 
+                measure_underrepresentation = FALSE, evcodes = TRUE, 
+                user_threshold = 0.05, correction_method = "fdr", 
+                domain_scope = "annotated", custom_bg = (background$X), 
+                numeric_ns = "", sources = NULL)
+```
+
+```{r}
+png(filename = "GO_top10-6modules_only_salt-related.png", width = 7, height = 6, res = 500, units = "in")
+ggplot(data = selected_modules, aes(x = query, y = term_name, 
+                        color = p_value, size = recall)) + 
+  geom_point() +
+  scale_color_gradient(low = "red", high = "blue") +
+  theme_bw() + 
+  ylab("") + 
+  xlab("") + 
+  facet_grid(~query, scales = "free") +
+  scale_y_discrete(labels = label_wrap(40)) +
+  theme(axis.text.x = element_blank(),
+        axis.text = element_text(colour = "black"))
+dev.off()
+```
+
+# enrichment of SUMO cycle genes in each module
+```{r}
+module_num <- as.data.frame(table(module_df$colors))
+total_gene <- sum(module_num$Freq)
+
+all_module <- unique(module_df$colors)
+f.test <- data.frame(module = character(), p.value = numeric(), stringsAsFactors = FALSE)
+
+for (i in 1:length(all_module)) {
+  
+# is SUMO and in the module
+a <- module_df %>% filter(colors == all_module[i], gene_id %in% SUMO_genes$TAIR.ID) %>% nrow()
+# number of genes in the module
+b <- module_num[module_num$Var1 ==  all_module[i],]$Freq
+# number of genes in the module but are not SUMO
+c <- b - a
+# is SUMO but not in the module
+d <- 33 - a
+#
+e <- total_gene - d
+
+data_test <- data.frame("not_sumo" = c(c, e),
+                        "is_sumo" = c(a, d),
+                        stringsAsFactors = F,
+                        row.names = c("in_module", "not_module"))
+
+pval <- fisher.test(data_test)$p.value
+f.test <- rbind(f.test, data.frame(module = all_module[i], p.value = pval, stringsAsFactors = FALSE))
+
+}
+```
+

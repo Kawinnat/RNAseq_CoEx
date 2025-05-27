@@ -1,0 +1,96 @@
+---
+title: "OrthoGroup: Arabidopsis and Rice"
+output: html_notebook
+---
+```{r}
+library(tidyverse)
+```
+
+```{r}
+rice_arabidopsis_ortho_groups <- read_tsv("ortholog_groups_merged.tsv")
+
+# 28,889
+rice_arabidopsis_ortho_groups_long <- rice_arabidopsis_ortho_groups %>%
+  separate_longer_delim(Athal_Accs, delim = ";") %>% 
+   separate_longer_delim(Osat_Accs, delim = ";") %>% 
+  mutate(Athal_Accs = str_remove_all(Athal_Accs, "atha\\|"),
+         Osat_Accs = str_remove_all(Osat_Accs, "osat\\|")) %>% 
+  distinct(.keep_all = T)
+
+write.csv(rice_arabidopsis_ortho_groups_long, "rice_arabidopsis_28889_ortho_groups.csv", quote = F)
+```
+
+```{r}
+# mapping ID to the ortho groups
+
+arabidopsis_id <- read_tsv("Arabidopsis_orthogroup_idmapping_2025_05_19.tsv")
+colnames(arabidopsis_id) <- c("At_uniprot", "At_id")
+
+rice_id <- read_tsv("Rice_idmapping_2025_05_20.tsv") %>% select("From", "Gene Names")
+colnames(rice_id) <- c("Os_uniprot", "Os_id")
+rice_id$Os_id <- lapply(rice_id$Os_id, function(x) {
+  str_extract_all(x, "\\bOs\\d{2}g\\S*", simplify = TRUE) # extract only RAP-DB models
+})
+
+rice_id$Os_id <- sapply(rice_id$Os_id, paste, collapse = ", ")
+
+rice_id <- rice_id %>% separate_longer_delim(Os_id, delim = ",") 
+
+
+rice_arabidopsis_ortho_groups_long_ID <- rice_arabidopsis_ortho_groups_long %>% left_join(arabidopsis_id, by = c("Athal_Accs"="At_uniprot")) %>% 
+  left_join(rice_id, by = c("Osat_Accs"="Os_uniprot")) 
+
+write.csv(rice_arabidopsis_ortho_groups_long_ID, "rice_arabidopsis_ortho_groups_long_ID.csv", quote = F)
+```
+
+```{r}
+#2268
+arabidopsis_DEG_up <- read.csv("Arabidopsis_DEG_up-regulated_atleast_2exp.csv")
+
+#3630
+rice_DEG_up <- read.csv("Rice_DEG_up-regulated_atleast_2exp.csv")
+
+arabidopsis_DEG_up_orthoCluster <- rice_arabidopsis_ortho_groups_long_ID %>% filter(At_id %in% arabidopsis_DEG_up$Up_genes_in_2_or_more)
+rice_DEG_up_orthoCluster <- rice_arabidopsis_ortho_groups_long_ID %>% filter(Os_id %in% rice_DEG_up$Up_genes_in_2_or_more)
+
+length(unique(arabidopsis_DEG_up_orthoCluster$`Group ID`)) # 951
+length(unique(arabidopsis_DEG_up_orthoCluster$At_id)) #1810
+
+
+length(unique(rice_DEG_up_orthoCluster$`Group ID`)) # 1308
+length(unique(rice_DEG_up_orthoCluster$Os_id)) #2,336
+
+length(intersect(arabidopsis_DEG_up_orthoCluster$`Group ID`, rice_DEG_up_orthoCluster$`Group ID`))
+
+#total clusters
+length(unique(rice_arabidopsis_ortho_groups_long_ID$`Group ID`))
+#unique Arabidopsis
+length(unique(rice_arabidopsis_ortho_groups_long_ID$At_id)) #19,813
+#unique rice
+length(unique(rice_arabidopsis_ortho_groups_long_ID$Os_id)) #21,468
+
+# how many groups At genes could be mapped to
+rice_arabidopsis_ortho_groups_long_ID %>% filter(!is.na(Os_id)) %>% distinct(`Group ID`) %>% nrow() #6898
+```
+
+```{r}
+#1,594
+arabidopsis_DEG_down <- read.csv("Arabidopsis_DEG_down-regulated_atleast_2exp.csv")
+# 9,909
+rice_DEG_down <- read.csv("Rice_DEG_down-regulated_atleast_2exp.csv")
+
+arabidopsis_DEG_down_orthoCluster <- rice_arabidopsis_ortho_groups_long_ID %>% filter(At_id %in% arabidopsis_DEG_down$Down_genes_in_2_or_more)
+
+# how many genes were mapped to the groups
+length(unique(arabidopsis_DEG_down_orthoCluster$At_id)) #1095
+
+rice_DEG_down_orthoCluster <- rice_arabidopsis_ortho_groups_long_ID %>% filter(Os_id %in% rice_DEG_down$Down_genes_in_2_or_more)
+
+length(unique(rice_DEG_down_orthoCluster$Os_id)) #7281
+
+length(unique(arabidopsis_DEG_down_orthoCluster$`Group ID`)) # 652
+
+length(unique(rice_DEG_down_orthoCluster$`Group ID`)) # 3621
+
+length(intersect(arabidopsis_DEG_down_orthoCluster$`Group ID`, rice_DEG_down_orthoCluster$`Group ID`)) #519
+```

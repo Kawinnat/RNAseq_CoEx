@@ -1,0 +1,127 @@
+---
+title: "GO analysis: each modules from Rice's co-expression network"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(gprofiler2)
+library(ComplexHeatmap)
+library(ggplot2)
+library(scales)
+library(limma)
+```
+
+
+```{r}
+background <- read.csv("VST_normCount_corrected.csv")
+module_df <- read.csv("gene_modules_GroupModel.txt")
+gene_number <- read.csv("gene_num_eachModule.csv") %>% arrange(desc(Frequency))
+
+gene_module_list <- list()
+colors_list <- unique(module_df$colors)
+
+for (i in 1:length(colors_list)) {
+  gene_module_list[colors_list[i]] <- module_df %>% filter(colors == colors_list[i])
+}
+
+GO_result <- gost(query = gene_module_list, organism = "osativa", custom_bg = background$X, correction_method = "fdr")
+
+GO_result_df <- GO_result$result  # 25 significant modules
+
+
+GO_result_df$query <- factor(GO_result_df$query, levels = (gene_number$colors))
+
+GO_result_df %>% filter(str_detect(term_name,"salt|water|drought|abiotic|salicylic|osmotic"))
+```
+```{r}
+unique(GO_result_df$query)
+```
+
+```{r}
+library(scales)
+
+top10 <- GO_result_df %>% filter(source == "GO:BP") %>% group_by(query) %>% arrange((p_value)) %>% slice(1:10)
+
+top_recall_over0.4_top10 <- GO_result_df %>% filter(source == "GO:BP",intersection_size >10) %>% group_by(query) %>% arrange((p_value)) %>% slice(1:7)
+
+
+png("only_BP_top7.png", width = 10, height = 17, units = "in", res = 300)
+ggplot(data = top_recall_over0.4_top10, aes(x = query, y = term_name, 
+                        color = p_value, size = recall)) + 
+  geom_point() +
+  scale_color_gradient(low = "red", high = "blue") +
+  theme_bw() + 
+  ylab("") + 
+  xlab("") + 
+  scale_y_discrete(labels = label_wrap(25)) +
+  ggtitle("GO enrichment analysis") +
+  theme(axis.text.x = element_text(angle = 30))
+dev.off()
+```
+
+# Functions
+```{r}
+get_go_plot <-function(input = NULL, name = NULL){
+
+p <- ggplot(data = input, aes(x = reorder(term_name, recall),y=0 ,size = recall, color = p_value)) +
+  geom_point() +
+  scale_color_gradient(low = "red", high = "blue") +
+  theme_bw() + 
+  xlab("") + 
+  scale_x_discrete(labels = label_wrap(30)) +
+  coord_flip()+
+  theme(axis.text = element_text(colour = "black"),
+        axis.text.x = element_blank(),
+        axis.title.x = element_blank()) 
+
+ggsave(paste(name, "_only_BP.png", sep = ""), plot = p, width = 3.5, height = 5.5, units = "in", dpi = 400)
+}
+
+get_go_plot2 <-function(input = NULL, name = NULL){
+
+p <- ggplot(data = input, aes(x = reorder(term_name, recall), y = recall, color = p_value)) +
+  geom_point() +
+  scale_color_gradient(low = "red", high = "blue") +
+  theme_bw() + 
+  ylab("Gene ratio") + 
+  xlab("") + 
+  scale_x_discrete(labels = label_wrap(30)) +
+  ggtitle("GO enrichment analysis") +
+  facet_grid(query ~., scales = "free", space = "free")+
+  coord_flip()+
+  theme(axis.text = element_text(colour = "black"))
+
+ggsave(paste(name, "_only_BP.png", sep = ""), plot = p, width = 3.5, height = 5, units = "in", dpi = 400)
+}
+```
+
+
+```{r}
+#turquoise
+turquoise_inter10_top10 <- GO_result_df %>% filter(source == "GO:BP",intersection_size >10, query == "turquoise") %>% group_by(query) %>% arrange((p_value)) %>% slice(1:20)
+
+get_go_plot(turquoise_inter10_top10, name = "turquoise_inter10")
+
+#blue
+blue_inter10_top10 <- GO_result_df %>% filter(source == "GO:BP",intersection_size >10, query == "blue") %>% group_by(query) %>% arrange((p_value)) %>% slice(1:14)
+
+salt_related <- GO_result_df %>% filter(str_detect(term_name, c("salt|osmotic|abiotic")), query == "blue")
+
+get_go_plot(rbind(blue_inter10_top10,salt_related), name = "blue_inter10")
+
+
+#brown
+brown_inter10_top10 <- GO_result_df %>% filter(source == "GO:BP",intersection_size >10, query == "brown") %>% group_by(query) %>% arrange((p_value)) %>% slice(1:20)
+
+get_go_plot(brown_inter10_top10, name = "brown_inter10")
+
+#other
+other_inter10_top5 <- GO_result_df %>% filter(source == "GO:BP",intersection_size >10, !query %in% c("turquoise","blue","brown")) %>% group_by(query) %>% arrange((p_value)) %>% slice(1:5)
+
+get_go_plot2(other_inter10_top5 %>% filter(query %in% c("grey","yellow","green","red","pink")), name = "other1_inter10")
+
+get_go_plot2(other_inter10_top5 %>% filter(query %in% c("magenta","purple","midnightblue","royalblue","darkgrey","brown4")), name = "other2_inter10")
+
+```
+
